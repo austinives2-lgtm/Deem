@@ -1,0 +1,128 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isSuperAdmin() {
+      return isAuthenticated() && (
+        request.auth.uid == "YNxF7YAv0XYqkZHgaX6mtxAbG103" ||
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "super_admin"
+      );
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && (
+        isSuperAdmin() ||
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "admin"
+      );
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    // 1. Users collection
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      // Only users can create their own document, must start as member unless super admin
+      allow create: if isOwner(userId) && (
+        request.resource.data.role == "member" || isSuperAdmin()
+      );
+      // Members cannot modify role, permissions, or organizationId
+      allow update: if isSuperAdmin() || (
+        isOwner(userId) &&
+        request.resource.data.role == resource.data.role &&
+        request.resource.data.permissions == resource.data.permissions &&
+        request.resource.data.organizationId == resource.data.organizationId
+      );
+      allow delete: if isSuperAdmin();
+    }
+
+    // 2. Services collection
+    match /services/{serviceId} {
+      allow read: if true; // Publicly visible to beneficiaries
+      allow write: if isAdmin();
+    }
+
+    // 3. Service Requests
+    match /serviceRequests/{requestId} {
+      allow read: if isAdmin() || (isAuthenticated() && resource.data.requestedBy == request.auth.uid);
+      allow create: if isAuthenticated();
+      allow update, delete: if isAdmin();
+    }
+
+    // 4. Blood Requests
+    match /bloodRequests/{requestId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update: if isAdmin() || (isAuthenticated() && resource.data.requestedBy == request.auth.uid);
+      allow delete: if isAdmin();
+    }
+
+    // 5. Activities
+    match /activities/{activityId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // 6. Finance: Contributions, Donations, Expenses
+    match /contributions/{contribId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    match /donations/{donationId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    match /expenses/{expenseId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    // 7. Notices & Announcements
+    match /notices/{noticeId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    // 8. Volunteers
+    match /volunteers/{volunteerId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    // 9. Conversations & 1-to-1 Messages
+    match /conversations/{conversationId} {
+      allow read: if isAuthenticated() && request.auth.uid in resource.data.participantIds;
+      allow create: if isAuthenticated() && request.auth.uid in request.resource.data.participantIds;
+      allow update: if isAuthenticated() && request.auth.uid in resource.data.participantIds;
+      allow delete: if isSuperAdmin();
+
+      match /messages/{messageId} {
+        allow read: if isAuthenticated() && (
+          request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participantIds
+        );
+        allow create: if isAuthenticated() && (
+          request.resource.data.senderId == request.auth.uid &&
+          request.auth.uid in get(/databases/$(database)/documents/conversations/$(conversationId)).data.participantIds
+        );
+        allow update, delete: if isSuperAdmin();
+      }
+    }
+
+    // 10. Notifications
+    match /notifications/{notificationId} {
+      allow read: if isAuthenticated() && (
+        resource.data.targetUserId == "" || resource.data.targetUserId == request.auth.uid
+      );
+      allow create: if isAuthenticated();
+      allow update, delete: if isAdmin();
+    }
+  }
+}
